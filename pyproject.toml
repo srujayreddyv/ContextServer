@@ -24,6 +24,7 @@ context-server = "server.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.setuptools.packages.find]
-include = ["server*", "tools*", "client*"]
+include = ["server*", "tools*", "client*", "tool_plugins*"]

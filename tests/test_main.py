@@ -24,10 +24,6 @@ class TestParseArgs:
         args = _parse_args(["--transport", "stdio"])
         assert args.transport == "stdio"
 
-    def test_transport_sse(self):
-        args = _parse_args(["--transport", "sse"])
-        assert args.transport == "sse"
-
     def test_invalid_transport(self):
         with pytest.raises(SystemExit):
             _parse_args(["--transport", "invalid"])

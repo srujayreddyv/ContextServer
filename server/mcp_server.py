@@ -57,7 +57,7 @@ class ContextMCPServer:
     Args:
         registry: The tool registry containing all registered tools.
         repo_root: Absolute path to the repository root directory.
-        transport: Transport type — ``"stdio"`` (default) or ``"sse"``.
+        transport: Transport type — ``"stdio"``.
     """
 
     def __init__(
@@ -138,8 +138,7 @@ class ContextMCPServer:
     async def run(self) -> None:
         """Start the MCP server on the configured transport.
 
-        Currently supports ``"stdio"``.  SSE support can be added by
-        wiring ``SseServerTransport`` from the ``mcp`` SDK.
+        Currently supports ``"stdio"``.
         """
         if self._transport == "stdio":
             await self._run_stdio()

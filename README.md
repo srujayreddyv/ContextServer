@@ -1,457 +1,878 @@
 # ContextServer
 
-An MCP (Model Context Protocol) compatible tool server that exposes filesystem, Git, and documentation search capabilities to AI agents. ContextServer enables automated repository inspection and contextual retrieval through a standardized protocol interface.
+ContextServer is a local Python MCP server for repository inspection. It gives MCP-compatible AI clients a small, read-only toolset for reading files, listing directories, searching text, searching documentation, and inspecting Git state inside a configured repository root.
 
-```
-AI Agent / CLI Client
-        │
-   MCP Transport (stdio)
-        │
-   ContextServer
-        │
-   ┌────┴─────────────────┐
-   │    Tool Registry      │
-   └────┬─────────────────┘
-        │
-   ┌────┼────────────┐
-   │    │             │
-Filesystem  Git    Search
- Tools     Tools    Tools
+It is best described as:
+
+```text
+Python backend process
+-> MCP tool server
+-> read-only repository context provider for AI agents
 ```
 
-## Features
+It is not a web application, REST API, browser extension, hosted SaaS backend, or plugin marketplace package. Clients communicate with it through the Model Context Protocol over stdio. In practice, an MCP client starts ContextServer as a subprocess and sends `tools/list` and `tools/call` requests over standard input/output.
 
-- **MCP Protocol Compliance** — Full MCP handshake, tool discovery (`tools/list`), and tool invocation (`tools/call`) via the official `mcp` Python SDK
-- **8 Built-in Tools** across filesystem, Git, and search categories
-- **Path Containment Security** — All file operations are sandboxed within the configured repository root; symlink escape and `../` traversal are blocked
-- **Read-Only by Design** — No tools create, modify, or delete files
-- **Interactive CLI Client** — REPL for testing tools manually over stdio transport
+## Current Status
+
+Implemented:
+
+- MCP stdio server using the official `mcp` Python SDK
+- Tool discovery through `tools/list`
+- Tool invocation through `tools/call`
+- JSON Schema validation for tool parameters
+- 9 read-only tools:
+  - `read_file`
+  - `list_directory`
+  - `search_files`
+  - `git_log`
+  - `git_diff`
+  - `git_status`
+  - `git_branches`
+  - `grep_search`
+  - `docs_search`
+- Internal plugin-style tool registration for filesystem, Git, search, and documentation tool groups
+- Interactive CLI client for manually testing tools
+- Path containment checks for filesystem access
+- Test suite covering path safety, filesystem tools, Git tools, search tools, documentation search, plugin registration, registry behavior, and CLI argument parsing
+
+Not implemented:
+
+- HTTP API
+- SSE transport
+- Web UI
+- Write/edit/delete tools
+- Semantic search
+- Embeddings
+- Authentication or multi-user access
+- Background daemon/service installation
+
+The CLI only accepts `--transport stdio` because stdio is the only implemented transport.
+
+## Architecture Overview
+
+![ContextServer architecture](assets/contextserver-architecture.png)
+
+```text
+MCP Client / Interactive CLI
+        |
+        | stdio transport
+        v
+ContextServer
+        |
+        v
+ToolRegistry
+        |
+        +-- Filesystem tools
+        |   +-- read_file
+        |   +-- list_directory
+        |   +-- search_files
+        |
+        +-- Git tools
+        |   +-- git_log
+        |   +-- git_diff
+        |   +-- git_status
+        |   +-- git_branches
+        |
+        +-- Search tools
+        |   +-- grep_search
+        |
+        +-- Documentation tools
+            +-- docs_search
+```
+
+The server process is configured with one repository root. All filesystem paths are resolved relative to that root and validated before file I/O. Git commands run with the repository root as the subprocess working directory. Built-in tools are grouped into internal plugin modules, so new tool groups can be registered without changing MCP request routing.
+
+## Repository Layout
+
+```text
+ContextServer/
+├── client/
+│   ├── __init__.py
+│   └── cli.py
+├── data/
+│   └── docs/
+│       ├── .gitkeep
+│       └── contextserver.md
+├── server/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── mcp_server.py
+│   ├── path_utils.py
+│   └── tool_registry.py
+├── tests/
+│   ├── __init__.py
+│   ├── test_docs_tools.py
+│   ├── test_filesystem_tools.py
+│   ├── test_git_tools.py
+│   ├── test_main.py
+│   ├── test_path_utils.py
+│   ├── test_search_tools.py
+│   ├── test_tool_plugins.py
+│   └── test_tool_registry.py
+├── tool_plugins/
+│   ├── __init__.py
+│   ├── docs.py
+│   ├── filesystem.py
+│   ├── git.py
+│   └── search.py
+├── tools/
+│   ├── __init__.py
+│   ├── docs_tools.py
+│   ├── filesystem_tools.py
+│   ├── git_tools.py
+│   └── search_tools.py
+├── .gitignore
+├── LICENSE
+├── README.md
+└── pyproject.toml
+```
+
+### Key Files
+
+| File | Purpose |
+| --- | --- |
+| `server/main.py` | CLI entry point. Parses arguments, validates the repository root, registers tools, and starts the MCP server. |
+| `server/mcp_server.py` | Wraps the MCP SDK low-level server and exposes `tools/list` and `tools/call`. |
+| `server/tool_registry.py` | Stores tool definitions, returns tool manifests, validates parameters, and dispatches calls. |
+| `server/path_utils.py` | Resolves paths and enforces containment inside the configured repository root. |
+| `tool_plugins/` | Internal plugin-style registration modules for built-in tool groups. |
+| `tools/docs_tools.py` | Implements `docs_search`. |
+| `tools/filesystem_tools.py` | Implements `read_file`, `list_directory`, and `search_files`. |
+| `tools/git_tools.py` | Implements `git_log`, `git_diff`, `git_status`, and `git_branches`. |
+| `tools/search_tools.py` | Implements `grep_search`. |
+| `client/cli.py` | Starts ContextServer over stdio and provides a small REPL for manual testing. |
+| `tests/` | Automated test suite. |
 
 ## Requirements
 
-- Python 3.10+
-- Git (for Git tools)
+- Python 3.10 or newer
+- Git CLI on `PATH` for Git tools
+- A Git repository if you want to use `git_*` tools
+
+Runtime Python dependencies:
+
+| Package | Purpose |
+| --- | --- |
+| `mcp` | MCP server/client SDK |
+| `jsonschema` | Tool input validation |
+
+Development dependencies:
+
+| Package | Purpose |
+| --- | --- |
+| `pytest` | Test runner |
+| `pytest-asyncio` | Async test support |
+| `hypothesis` | Property-based testing support |
 
 ## Installation
+
+From the repository root:
 
 ```bash
 pip install -e .
 ```
 
-For development (includes test dependencies):
+For development:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-> Requires Python 3.10+. If your system Python is older, create a venv with a compatible version first:
->
-> ```bash
-> python3.10 -m venv .venv && source .venv/bin/activate
-> ```
-
-### Dependencies
-
-| Package          | Purpose                            |
-| ---------------- | ---------------------------------- |
-| `mcp`            | MCP protocol SDK (server + client) |
-| `jsonschema`     | Tool parameter validation          |
-| `pytest`         | Test framework (dev)               |
-| `pytest-asyncio` | Async test support (dev)           |
-| `hypothesis`     | Property-based testing (dev)       |
-
-## Quick Start
-
-### Start the Server
+If your default Python is older than 3.10, create a compatible virtual environment first:
 
 ```bash
-# Serve the current directory
+python3.10 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+## Running the Server
+
+Serve the current directory:
+
+```bash
 python -m server.main
+```
 
-# Serve a specific repository
-python -m server.main --repo-root /path/to/your/repo
+Serve a specific repository:
 
-# Specify transport (default: stdio)
+```bash
+python -m server.main --repo-root /path/to/repo
+```
+
+Use the installed console script:
+
+```bash
+context-server --repo-root /path/to/repo
+```
+
+Explicitly specify stdio transport:
+
+```bash
 python -m server.main --repo-root /path/to/repo --transport stdio
 ```
 
-### Use the Interactive CLI Client
+Expected startup message:
+
+```text
+Starting ContextServer with transport: stdio
+```
+
+After startup, the process waits for MCP messages on stdio. Running it directly in a terminal is useful only as a startup smoke test. Press `Ctrl+C` to stop it.
+
+## Using the Interactive CLI Client
+
+The included client starts ContextServer as a subprocess over stdio and gives you a REPL for manual tool testing.
 
 ```bash
-# Connect to a repo
-python -m client.cli --repo-root /path/to/your/repo
+python -m client.cli --repo-root /path/to/repo
 ```
 
-Once connected, you get a REPL:
+Example session:
 
-```
-Connecting to ContextServer (repo: /path/to/your/repo) ...
+```text
+Connecting to ContextServer (repo: /path/to/repo) ...
 Connected. Type 'help' for available commands.
 
 mcp> list_tools
-mcp> call read_file {"path": "README.md"}
-mcp> call list_directory {"path": ".", "depth": 2}
-mcp> call git_log {"max_count": 5}
-mcp> call grep_search {"query": "TODO", "include_pattern": "*.py"}
+mcp> call read_file {"path": "README.md", "start_line": 1, "end_line": 5}
+mcp> call list_directory {"path": ".", "depth": 1}
+mcp> call search_files {"pattern": "**/*.py"}
+mcp> call grep_search {"query": "ContextServer", "include_pattern": "*.md"}
+mcp> call docs_search {"query": "ContextServer"}
+mcp> call git_status {}
 mcp> quit
+Disconnected.
 ```
 
-### CLI Client Commands
+CLI commands:
 
-| Command              | Description                        |
-| -------------------- | ---------------------------------- |
-| `list_tools`         | List all available tools           |
-| `call <name> <json>` | Invoke a tool with JSON parameters |
-| `help`               | Show available commands            |
-| `quit` / `exit`      | Exit the client                    |
+| Command | Description |
+| --- | --- |
+| `list_tools` | List all tools exposed by the server. |
+| `call <name> <json>` | Call a tool with JSON parameters. |
+| `help` | Show REPL help. |
+| `quit` / `exit` | Exit the REPL. |
 
-## Tool Reference
+## MCP Client Configuration
 
-### Filesystem Tools
+ContextServer can be configured in an MCP-compatible client by pointing the client at the Python module entry point.
 
-#### `read_file`
-
-Read the text content of a file, optionally limited to a line range.
-
-| Parameter    | Type    | Required | Description                               |
-| ------------ | ------- | -------- | ----------------------------------------- |
-| `path`       | string  | Yes      | Relative file path within the repository  |
-| `start_line` | integer | No       | Starting line number (1-indexed)          |
-| `end_line`   | integer | No       | Ending line number (1-indexed, inclusive) |
-
-**Returns:** File text content as a string.
-
-**Examples:**
-
-```json
-{"path": "src/main.py"}
-{"path": "src/main.py", "start_line": 10, "end_line": 25}
-```
-
-**Errors:**
-
-- `FileNotFoundError` — Path does not exist
-- `PathContainmentError` — Path resolves outside the repository root
-
----
-
-#### `list_directory`
-
-List files and subdirectories with optional recursive depth.
-
-| Parameter | Type    | Required | Description                                              |
-| --------- | ------- | -------- | -------------------------------------------------------- |
-| `path`    | string  | Yes      | Relative directory path within the repository            |
-| `depth`   | integer | No       | Recursion depth (default 1). 1 = immediate children only |
-
-**Returns:** List of `{"name": "...", "type": "file"|"directory"}` entries.
-
-**Examples:**
-
-```json
-{"path": "."}
-{"path": "src", "depth": 3}
-```
-
-**Errors:**
-
-- `FileNotFoundError` — Directory does not exist or path is a file
-- `PathContainmentError` — Path resolves outside the repository root
-
----
-
-#### `search_files`
-
-Search for files matching a glob pattern.
-
-| Parameter  | Type   | Required | Description                                            |
-| ---------- | ------ | -------- | ------------------------------------------------------ |
-| `pattern`  | string | Yes      | Glob pattern (e.g. `*.py`, `**/*.txt`)                 |
-| `base_dir` | string | No       | Subdirectory to restrict the search to (default: root) |
-
-**Returns:** Sorted list of matching file paths relative to the repository root. Empty list if no matches.
-
-**Examples:**
-
-```json
-{"pattern": "**/*.py"}
-{"pattern": "*.json", "base_dir": "config"}
-```
-
----
-
-### Git Tools
-
-> Git tools require the `git` CLI on PATH and a `.git` directory in the repository root.
-
-#### `git_log`
-
-Retrieve recent Git commit history.
-
-| Parameter   | Type    | Required | Description                                 |
-| ----------- | ------- | -------- | ------------------------------------------- |
-| `max_count` | integer | No       | Maximum commits to return (default 10)      |
-| `file_path` | string  | No       | Only return commits that modified this file |
-
-**Returns:** List of `{"hash", "author", "date", "message"}` commit objects.
-
-**Examples:**
-
-```json
-{}
-{"max_count": 5}
-{"file_path": "src/main.py", "max_count": 3}
-```
-
-**Errors:**
-
-- `GitNotAvailableError` — No `.git` directory or `git` CLI not found
-
----
-
-#### `git_diff`
-
-Show diffs between commits or the working tree.
-
-| Parameter | Type   | Required | Description             |
-| --------- | ------ | -------- | ----------------------- |
-| `ref1`    | string | No       | First commit reference  |
-| `ref2`    | string | No       | Second commit reference |
-
-**Behavior:**
-
-- No refs → diff of uncommitted working tree changes
-- One ref (`ref1`) → diff between that ref and the working tree
-- Two refs (`ref1`, `ref2`) → diff between the two commits
-
-**Returns:** Diff text as a string (empty string if no differences).
-
-**Examples:**
-
-```json
-{}
-{"ref1": "HEAD~3"}
-{"ref1": "abc1234", "ref2": "def5678"}
-```
-
-**Errors:**
-
-- `GitRefNotFoundError` — Invalid commit reference
-- `GitNotAvailableError` — No `.git` directory or `git` CLI not found
-
----
-
-#### `git_status`
-
-Return current branch and file status.
-
-**Parameters:** None required.
-
-**Returns:**
-
-```json
-{
-  "branch": "main",
-  "modified": ["file1.py"],
-  "staged": ["file2.py"],
-  "untracked": ["newfile.txt"]
-}
-```
-
----
-
-#### `git_branches`
-
-List local branches.
-
-**Parameters:** None required.
-
-**Returns:** List of `{"name": "...", "is_current": true|false}` branch objects. Exactly one branch will have `is_current: true`.
-
-**Example response:**
-
-```json
-[
-  { "name": "main", "is_current": true },
-  { "name": "feature-x", "is_current": false }
-]
-```
-
----
-
-### Search Tools
-
-#### `grep_search`
-
-Full-text search across repository files with context lines.
-
-| Parameter         | Type    | Required | Description                                     |
-| ----------------- | ------- | -------- | ----------------------------------------------- |
-| `query`           | string  | Yes      | Text to search for                              |
-| `include_pattern` | string  | No       | Glob pattern to filter which files are searched |
-| `case_sensitive`  | boolean | No       | Case-sensitive search (default: true)           |
-
-**Returns:** List of match objects:
-
-```json
-{
-  "file": "src/main.py",
-  "line_number": 42,
-  "content": "    result = process(data)",
-  "context_before": ["    # Process the input", "    data = load()"],
-  "context_after": ["    return result", ""]
-}
-```
-
-Each match includes up to 2 lines of context before and after. Returns an empty list if no matches. Binary files are automatically skipped.
-
-**Examples:**
-
-```json
-{"query": "TODO"}
-{"query": "import", "include_pattern": "*.py"}
-{"query": "error", "case_sensitive": false}
-```
-
-## Architecture
-
-### Project Structure
-
-```
-ContextServer/
-├── server/
-│   ├── __init__.py
-│   ├── main.py              # Entry point, CLI arg parsing, server startup
-│   ├── mcp_server.py        # MCP protocol handling (wraps mcp SDK)
-│   ├── tool_registry.py     # Tool registration, manifest, dispatch + validation
-│   └── path_utils.py        # Path resolution and containment security
-├── tools/
-│   ├── __init__.py
-│   ├── filesystem_tools.py  # read_file, list_directory, search_files
-│   ├── git_tools.py         # git_log, git_diff, git_status, git_branches
-│   └── search_tools.py      # grep_search
-├── client/
-│   ├── __init__.py
-│   └── cli.py               # Interactive MCP client REPL
-├── tests/
-│   ├── test_path_utils.py
-│   ├── test_tool_registry.py
-│   ├── test_filesystem_tools.py
-│   ├── test_git_tools.py
-│   ├── test_search_tools.py
-│   └── test_main.py
-├── data/
-│   └── docs/                # Sample documentation directory
-└── pyproject.toml
-```
-
-### How It Works
-
-1. **Startup** — `main.py` parses CLI args, validates the repo root, registers all 8 tools into the `ToolRegistry`, and starts the MCP server on stdio transport.
-
-2. **Tool Discovery** — When a client sends `tools/list`, the server returns a manifest with each tool's name, description, and JSON Schema for its parameters.
-
-3. **Tool Invocation** — When a client sends `tools/call`, the server:
-   - Looks up the tool in the registry
-   - Validates parameters against the tool's JSON Schema
-   - Dispatches to the async handler
-   - Returns the result as MCP `TextContent`, or an error response if something fails
-
-4. **Path Security** — Every filesystem operation passes through `resolve_and_validate()` which resolves symlinks via `os.path.realpath()` and verifies the result stays within the repo root.
-
-5. **Git Operations** — Git tools shell out to the `git` CLI via `subprocess` rather than using a Python Git library, keeping dependencies minimal.
-
-### Error Handling
-
-All tool errors are caught and returned as MCP error responses (`isError: true`) with descriptive messages. The server never crashes from a tool error.
-
-| Error Type               | When                                       |
-| ------------------------ | ------------------------------------------ |
-| `ToolNotFoundError`      | Unknown tool name in `tools/call`          |
-| `InvalidParametersError` | Parameters fail JSON Schema validation     |
-| `FileNotFoundError`      | File or directory doesn't exist            |
-| `PathContainmentError`   | Path resolves outside the repository root  |
-| `GitNotAvailableError`   | No `.git` directory or `git` CLI not found |
-| `GitRefNotFoundError`    | Invalid commit reference                   |
-
-## MCP Integration
-
-### Using with an MCP Client
-
-ContextServer works with any MCP-compatible client. To configure it in an `mcp.json`:
+Example `mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "ContextServer": {
       "command": "python",
-      "args": ["-m", "server.main", "--repo-root", "/path/to/your/repo"],
+      "args": [
+        "-m",
+        "server.main",
+        "--repo-root",
+        "/path/to/repo"
+      ],
       "cwd": "/path/to/ContextServer"
     }
   }
 }
 ```
 
-### Using Programmatically
+If installed with `pip install -e .`, you can also use the console script:
+
+```json
+{
+  "mcpServers": {
+    "ContextServer": {
+      "command": "context-server",
+      "args": [
+        "--repo-root",
+        "/path/to/repo"
+      ]
+    }
+  }
+}
+```
+
+The exact config file location and schema depend on the MCP client you are using.
+
+## Programmatic MCP Client Example
 
 ```python
+import asyncio
+
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-params = StdioServerParameters(
-    command="python",
-    args=["-m", "server.main", "--repo-root", "/path/to/repo"],
-    cwd="/path/to/ContextServer",
-)
 
-async with stdio_client(params) as (read, write):
-    async with ClientSession(read, write) as session:
-        await session.initialize()
+async def main() -> None:
+    params = StdioServerParameters(
+        command="python",
+        args=[
+            "-m",
+            "server.main",
+            "--repo-root",
+            "/path/to/repo",
+        ],
+        cwd="/path/to/ContextServer",
+    )
 
-        # List tools
-        tools = await session.list_tools()
+    async with stdio_client(params) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
 
-        # Read a file
-        result = await session.call_tool("read_file", {"path": "README.md"})
+            tools = await session.list_tools()
+            print([tool.name for tool in tools.tools])
 
-        # Search for code
-        result = await session.call_tool("grep_search", {
-            "query": "def main",
-            "include_pattern": "*.py"
-        })
+            result = await session.call_tool(
+                "read_file",
+                {"path": "README.md", "start_line": 1, "end_line": 5},
+            )
+            print(result.content[0].text)
+
+
+asyncio.run(main())
 ```
 
-## Testing
+## Tool Reference
 
-Run the full test suite:
+All tool parameters are JSON objects. Tool outputs are returned as MCP `TextContent`. String results are returned directly. Non-string results are JSON-serialized before being placed in `TextContent`.
+
+Known tool errors are returned as MCP error responses with `isError: true`; they do not crash the server.
+
+### `read_file`
+
+Read UTF-8 text content from a file inside the configured repository root.
+
+Parameters:
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | Yes | File path relative to the repository root. Absolute paths are accepted only if they resolve inside the repository root. |
+| `start_line` | integer | No | 1-indexed first line to include. |
+| `end_line` | integer | No | 1-indexed final line to include, inclusive. |
+
+Examples:
+
+```json
+{"path": "README.md"}
+```
+
+```json
+{"path": "server/main.py", "start_line": 1, "end_line": 20}
+```
+
+Returns:
+
+```text
+file contents
+```
+
+Behavior:
+
+- Reads the full file when no line range is supplied.
+- Uses 1-indexed line numbers.
+- Treats `end_line` as inclusive.
+- Opens files as UTF-8 text.
+- Raises `FileNotFoundError` if the resolved path is not a file.
+- Raises `PathContainmentError` if the path resolves outside the repository root.
+
+### `list_directory`
+
+List files and directories inside a directory.
+
+Parameters:
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | Yes | Directory path relative to the repository root. |
+| `depth` | integer | No | Recursion depth. Defaults to `1`. A depth of `1` returns immediate children only. |
+
+Example:
+
+```json
+{"path": ".", "depth": 2}
+```
+
+Returns:
+
+```json
+[
+  {"name": "README.md", "type": "file"},
+  {"name": "server", "type": "directory"},
+  {"name": "server/main.py", "type": "file"}
+]
+```
+
+Behavior:
+
+- Returns a flat list.
+- Sorts child names before collecting entries.
+- Uses `type` values of `file` or `directory`.
+- Returns nested entry names relative to the requested directory.
+- Silently skips unreadable subdirectories.
+- Raises `FileNotFoundError` if the resolved path is not a directory.
+- Raises `PathContainmentError` if the path resolves outside the repository root.
+
+### `search_files`
+
+Find files by glob pattern.
+
+Parameters:
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `pattern` | string | Yes | Glob pattern such as `*.py`, `**/*.py`, or `*.json`. |
+| `base_dir` | string | No | Subdirectory to search from. Defaults to the repository root. |
+
+Examples:
+
+```json
+{"pattern": "**/*.py"}
+```
+
+```json
+{"pattern": "*.json", "base_dir": "config"}
+```
+
+Returns:
+
+```json
+[
+  "client/cli.py",
+  "server/main.py",
+  "tools/git_tools.py"
+]
+```
+
+Behavior:
+
+- Uses `pathlib.Path.glob`.
+- Returns files only, not directories.
+- Returns paths relative to the repository root.
+- Sorts results before returning.
+- Raises `PathContainmentError` if `base_dir` resolves outside the repository root.
+
+### `git_log`
+
+Return recent commits from the configured repository.
+
+Parameters:
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `max_count` | integer | No | Maximum number of commits to return. Defaults to `10`. |
+| `file_path` | string | No | Restrict history to commits that touched this file. |
+
+Examples:
+
+```json
+{}
+```
+
+```json
+{"max_count": 5}
+```
+
+```json
+{"file_path": "README.md", "max_count": 3}
+```
+
+Returns:
+
+```json
+[
+  {
+    "hash": "360cb49...",
+    "author": "Srujay Reddy",
+    "date": "2026-06-01T12:00:00-07:00",
+    "message": "Add ContextServer implementation"
+  }
+]
+```
+
+Behavior:
+
+- Runs `git log`.
+- Returns full commit hashes.
+- Uses ISO author dates from Git.
+- Returns an empty list for Git errors such as an empty repository.
+- Raises `GitNotAvailableError` if `git` is missing or no `.git` directory exists at the configured repository root.
+
+### `git_diff`
+
+Return Git diff text.
+
+Parameters:
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `ref1` | string | No | First Git reference. |
+| `ref2` | string | No | Second Git reference. |
+
+Examples:
+
+```json
+{}
+```
+
+```json
+{"ref1": "HEAD~1"}
+```
+
+```json
+{"ref1": "HEAD~1", "ref2": "HEAD"}
+```
+
+Behavior:
+
+- With no refs, runs `git diff` and returns uncommitted working-tree changes.
+- With `ref1`, returns the diff between `ref1` and the working tree.
+- With `ref1` and `ref2`, returns the diff between those refs.
+- Verifies supplied refs with `git rev-parse --verify`.
+- Returns an empty string when there is no diff.
+- Raises `GitRefNotFoundError` for invalid refs.
+- Raises `GitNotAvailableError` if `git` is missing or no `.git` directory exists at the configured repository root.
+
+### `git_status`
+
+Return branch and file status.
+
+Parameters:
+
+```json
+{}
+```
+
+Returns:
+
+```json
+{
+  "branch": "main",
+  "modified": ["README.md"],
+  "staged": ["server/main.py"],
+  "untracked": ["notes.txt"]
+}
+```
+
+Behavior:
+
+- Runs `git status --porcelain=v1 --branch`.
+- Parses the current branch name.
+- Separates modified, staged, and untracked paths.
+- Handles renamed paths by reporting the new path.
+- Raises `GitNotAvailableError` if `git` is missing, no `.git` directory exists, or `git status` fails.
+
+### `git_branches`
+
+Return local Git branches.
+
+Parameters:
+
+```json
+{}
+```
+
+Returns:
+
+```json
+[
+  {"name": "main", "is_current": true},
+  {"name": "feature-x", "is_current": false}
+]
+```
+
+Behavior:
+
+- Runs `git branch --list`.
+- Returns local branches only.
+- Marks the checked-out branch with `is_current: true`.
+- Skips detached HEAD entries.
+- Raises `GitNotAvailableError` if `git` is missing, no `.git` directory exists, or `git branch` fails.
+
+### `grep_search`
+
+Search UTF-8 text files line by line for a literal query.
+
+This is a plain full-text search tool. It does not perform semantic search, ranking, fuzzy matching, or documentation indexing.
+
+Parameters:
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `query` | string | Yes | Literal text to search for. The query is escaped before regex compilation. |
+| `include_pattern` | string | No | Glob-style filter matched against repository-relative paths. |
+| `case_sensitive` | boolean | No | Whether matching is case-sensitive. Defaults to `true`. |
+
+Examples:
+
+```json
+{"query": "TODO"}
+```
+
+```json
+{"query": "def main", "include_pattern": "*.py"}
+```
+
+```json
+{"query": "contextserver", "case_sensitive": false}
+```
+
+Returns:
+
+```json
+[
+  {
+    "file": "server/main.py",
+    "line_number": 37,
+    "content": "        description=\"ContextServer - MCP tool server for repository inspection\",",
+    "context_before": [
+      "def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:",
+      "    \"\"\"Parse command-line arguments.\"\"\""
+    ],
+    "context_after": [
+      "    )",
+      "    parser.add_argument("
+    ]
+  }
+]
+```
+
+Behavior:
+
+- Walks the configured repository root with `os.walk`.
+- Reads candidate files as UTF-8 text.
+- Skips binary, unreadable, or non-UTF-8 files.
+- Returns every matching line.
+- Includes up to 2 lines of context before and after each match.
+- Uses literal matching by escaping the supplied query with `re.escape`.
+- Uses `fnmatch.fnmatch` for `include_pattern`.
+
+### `docs_search`
+
+Search documentation-like UTF-8 text files line by line for a literal query.
+
+This is a documentation-focused grep tool. It searches `.md`, `.mdx`, `.txt`, and `.rst` files only. It does not perform semantic search, embeddings, ranking, or fuzzy matching.
+
+Default search root:
+
+1. `docs/` when present.
+2. `data/docs/` when `docs/` is absent and `data/docs/` is present.
+3. Repository root when neither docs directory exists, filtered to documentation-like file extensions.
+
+Parameters:
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `query` | string | Yes | Literal text to search for. The query is escaped before regex compilation. |
+| `docs_dir` | string | No | Documentation directory to search, relative to the repository root. |
+| `case_sensitive` | boolean | No | Whether matching is case-sensitive. Defaults to `false`. |
+| `max_results` | integer | No | Maximum number of matches to return. Defaults to `50`. Minimum `1`. |
+
+Examples:
+
+```json
+{"query": "ContextServer"}
+```
+
+```json
+{"query": "install", "docs_dir": "docs"}
+```
+
+```json
+{"query": "MCP", "case_sensitive": true, "max_results": 10}
+```
+
+Returns:
+
+```json
+[
+  {
+    "file": "data/docs/contextserver.md",
+    "line_number": 3,
+    "content": "ContextServer is an MCP tool server that lets AI agents inspect repositories",
+    "context_before": [
+      "# ContextServer Documentation",
+      ""
+    ],
+    "context_after": [
+      "through read-only filesystem tools, Git introspection, and documentation search."
+    ]
+  }
+]
+```
+
+Behavior:
+
+- Uses the default docs root unless `docs_dir` is provided.
+- Validates `docs_dir` with the same path containment checks as filesystem tools.
+- Searches only `.md`, `.mdx`, `.txt`, and `.rst` files.
+- Skips binary, unreadable, or non-UTF-8 files.
+- Returns every matching line until `max_results` is reached.
+- Includes up to 2 lines of context before and after each match.
+- Uses literal matching by escaping the supplied query with `re.escape`.
+- Is case-insensitive by default.
+
+## Security Model
+
+ContextServer is read-only by design.
+
+Implemented protections:
+
+- No tool creates, edits, or deletes files.
+- Filesystem paths pass through `resolve_and_validate`.
+- Paths are resolved with `os.path.realpath`.
+- Symlinks are followed before containment is checked.
+- `../` traversal is blocked when it resolves outside the repository root.
+- Prefix false positives are blocked. For example, `/repo-extra` is not treated as inside `/repo`.
+- Git subprocesses run with `cwd` set to the configured repository root.
+
+Important boundaries:
+
+- This server is intended for local trusted MCP client use.
+- It does not implement user authentication.
+- It does not sandbox Git itself beyond setting the working directory.
+- It does not restrict read access by file extension.
+- It skips unreadable or non-UTF-8 files for grep, but `read_file` expects UTF-8 text.
+
+## Error Handling
+
+The MCP server catches known tool-layer exceptions and returns MCP error responses instead of crashing.
+
+Known errors:
+
+| Error | Source | Meaning |
+| --- | --- | --- |
+| `ToolNotFoundError` | `server/tool_registry.py` | A client requested an unknown tool. |
+| `InvalidParametersError` | `server/tool_registry.py` | Tool arguments failed JSON Schema validation. |
+| `PathContainmentError` | `server/path_utils.py` | A path resolved outside the repository root. |
+| `FileNotFoundError` | Filesystem tools | A requested file or directory does not exist. |
+| `GitNotAvailableError` | Git tools | Git is unavailable or the configured root is not a Git repository. |
+| `GitRefNotFoundError` | Git tools | A supplied Git ref is invalid. |
+
+Error responses are returned as `TextContent` with `isError: true`.
+
+Unexpected exceptions are caught, logged, and returned as internal error responses.
+
+## Verification
+
+Run all tests:
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest
 ```
 
-The test suite includes 103 tests covering:
+Expected result:
 
-- **Path utils** (11 tests) — path resolution, containment, symlink handling, traversal prevention
-- **Tool registry** (9 tests) — registration, manifest generation, dispatch, error handling
-- **Filesystem tools** (29 tests) — read_file, list_directory, search_files with edge cases
-- **Git tools** (31 tests) — git_log, git_diff, git_status, git_branches against temp repos
-- **Search tools** (15 tests) — grep_search with context lines, patterns, case sensitivity
-- **Main entry point** (8 tests) — argument parsing, repo root validation
+```text
+117 passed
+```
 
-### Running a Single Test Module
+Run a single test module:
 
 ```bash
 python -m pytest tests/test_filesystem_tools.py -v
 python -m pytest tests/test_git_tools.py -v
+python -m pytest tests/test_search_tools.py -v
 ```
 
-## Security
+Check repository state:
 
-- All file paths are resolved to absolute paths and verified against the repository root before any I/O
-- Symlinks that resolve outside the repository root are rejected
-- `../` traversal attempts are blocked
-- The server operates in read-only mode — no write operations are exposed
-- Git operations are scoped to the configured repository root
+```bash
+git status --short --branch
+```
+
+Expected clean state:
+
+```text
+## main...origin/main
+```
+
+Check installed console script:
+
+```bash
+context-server --help
+```
+
+Expected: argparse help showing `--repo-root` and `--transport`.
+
+Smoke test server startup:
+
+```bash
+python -m server.main --repo-root .
+```
+
+Expected:
+
+```text
+Starting ContextServer with transport: stdio
+```
+
+Then press `Ctrl+C`.
+
+Manual tool test:
+
+```bash
+python -m client.cli --repo-root .
+```
+
+Then run:
+
+```text
+list_tools
+call read_file {"path": "README.md", "start_line": 1, "end_line": 5}
+call list_directory {"path": ".", "depth": 1}
+call search_files {"pattern": "**/*.py"}
+call grep_search {"query": "ContextServer", "include_pattern": "*.md"}
+call docs_search {"query": "ContextServer"}
+call git_status {}
+quit
+```
+
+## Test Coverage
+
+The current test suite covers:
+
+| Module | Coverage Focus |
+| --- | --- |
+| `tests/test_docs_tools.py` | Documentation search defaults, docs directory override, case sensitivity, max results, path safety. |
+| `tests/test_path_utils.py` | Path resolution, root containment, traversal prevention, symlink handling. |
+| `tests/test_tool_registry.py` | Tool registration, manifest generation, validation, unknown tools, dispatch. |
+| `tests/test_tool_plugins.py` | Internal plugin registration and complete tool manifest coverage. |
+| `tests/test_filesystem_tools.py` | File reading, line ranges, directory listing, glob search, path safety. |
+| `tests/test_git_tools.py` | Git log, diff, status, branches, invalid refs, unavailable Git repositories. |
+| `tests/test_search_tools.py` | Literal grep, context lines, include patterns, case sensitivity, binary skip behavior. |
+| `tests/test_mcp_stdio_integration.py` | End-to-end MCP stdio `tools/list` and `tools/call` behavior. |
+| `tests/test_main.py` | Argument parsing and repository root validation. |
+
+## Known Limitations
+
+- Only stdio transport is implemented.
+- Search is literal grep-style full-text search, not semantic search.
+- Documentation search is docs-focused literal search, not semantic documentation indexing.
+- Tool outputs are returned as text content. Structured outputs are JSON-serialized into text.
+- Filesystem tools are read-only.
+- Git tools require the configured repository root to contain `.git`.
+- The CLI client is a manual testing helper, not a full MCP client application.
+
+## Development Notes
+
+Registering tools happens through internal plugin modules. `server/main.py` creates a registry and delegates tool registration:
+
+```python
+registry = ToolRegistry()
+register_all(registry, resolved_root)
+```
+
+Each built-in plugin in `tool_plugins/` owns one tool group and exposes `register(registry, repo_root)`.
+
+Each tool module exposes:
+
+- one or more async handler functions
+- JSON Schema parameter definitions
+- `make_*_tool()` factory functions returning `ToolDefinition`
+- `set_repo_root()` for module-level repository configuration
+
+The registry validates input with `jsonschema.validate` before dispatching to the handler.
 
 ## License
 

@@ -12,21 +12,7 @@ import sys
 
 from server.mcp_server import ContextMCPServer
 from server.tool_registry import ToolRegistry
-from tools.filesystem_tools import (
-    make_list_directory_tool,
-    make_read_file_tool,
-    make_search_files_tool,
-)
-from tools.filesystem_tools import set_repo_root as fs_set_repo_root
-from tools.git_tools import (
-    make_git_branches_tool,
-    make_git_diff_tool,
-    make_git_log_tool,
-    make_git_status_tool,
-)
-from tools.git_tools import set_repo_root as git_set_repo_root
-from tools.search_tools import make_grep_search_tool
-from tools.search_tools import set_repo_root as search_set_repo_root
+from tool_plugins import register_all
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +29,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio"],
         default="stdio",
         help="MCP transport type (default: stdio)",
     )
@@ -78,21 +64,9 @@ def main(repo_root: str | None = None, transport: str = "stdio") -> None:
 
     resolved_root = _validate_repo_root(effective_root)
 
-    # Configure tool modules with the repo root
-    fs_set_repo_root(resolved_root)
-    git_set_repo_root(resolved_root)
-    search_set_repo_root(resolved_root)
-
-    # Build the tool registry
+    # Build the tool registry through internal tool plugins.
     registry = ToolRegistry()
-    registry.register(make_read_file_tool())
-    registry.register(make_list_directory_tool())
-    registry.register(make_search_files_tool())
-    registry.register(make_git_log_tool())
-    registry.register(make_git_diff_tool())
-    registry.register(make_git_status_tool())
-    registry.register(make_git_branches_tool())
-    registry.register(make_grep_search_tool())
+    register_all(registry, resolved_root)
 
     print(f"Starting ContextServer with transport: {effective_transport}", file=sys.stderr)
 
