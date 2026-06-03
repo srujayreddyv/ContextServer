@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ContextServer"
 version = "0.1.0"
-description = "MCP tool server exposing filesystem, Git, and search capabilities to AI agents"
+description = "MCP tool server and local workbench exposing filesystem, Git, search, and documentation tools to AI agents"
 requires-python = ">=3.10"
 dependencies = [
     "mcp",
@@ -21,6 +21,7 @@ dev = [
 
 [project.scripts]
 context-server = "server.main:main"
+context-server-ui = "server.web_ui:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

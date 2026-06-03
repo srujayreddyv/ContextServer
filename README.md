@@ -10,7 +10,7 @@ Python backend process
 -> read-only repository context provider for AI agents
 ```
 
-It is not a web application, REST API, browser extension, hosted SaaS backend, or plugin marketplace package. Clients communicate with it through the Model Context Protocol over stdio. In practice, an MCP client starts ContextServer as a subprocess and sends `tools/list` and `tools/call` requests over standard input/output.
+It is not a REST API, browser extension, hosted SaaS backend, or plugin marketplace package. MCP clients communicate with it through the Model Context Protocol over stdio. In practice, an MCP client starts ContextServer as a subprocess and sends `tools/list` and `tools/call` requests over standard input/output. The project also includes a local browser dashboard for manually managing stdio MCP server definitions and calling their tools.
 
 ## Current Status
 
@@ -32,21 +32,18 @@ Implemented:
   - `docs_search`
 - Internal plugin-style tool registration for filesystem, Git, search, and documentation tool groups
 - Interactive CLI client for manually testing tools
+- Local web dashboard for listing/calling tools and adding other stdio MCP servers
 - Path containment checks for filesystem access
-- Test suite covering path safety, filesystem tools, Git tools, search tools, documentation search, plugin registration, registry behavior, and CLI argument parsing
+- Test suite covering path safety, filesystem tools, Git tools, search tools, documentation search, plugin registration, MCP stdio integration, web UI helpers, registry behavior, and CLI argument parsing
 
-Not implemented:
+Current scope:
 
-- HTTP API
-- SSE transport
-- Web UI
-- Write/edit/delete tools
-- Semantic search
-- Embeddings
-- Authentication or multi-user access
-- Background daemon/service installation
+- Local stdio MCP server, designed to be launched by an MCP-compatible client.
+- Read-only repository inspection, not file editing or code modification.
+- Literal search and documentation search, not embedding-based semantic retrieval.
+- Developer-focused CLI and local browser dashboard for manual testing, not a hosted service.
 
-The CLI only accepts `--transport stdio` because stdio is the only implemented transport.
+The CLI accepts `--transport stdio` because stdio is the supported transport for this local MCP server.
 
 ## Architecture Overview
 
@@ -98,17 +95,20 @@ ContextServer/
 │   ├── main.py
 │   ├── mcp_server.py
 │   ├── path_utils.py
-│   └── tool_registry.py
+│   ├── tool_registry.py
+│   └── web_ui.py
 ├── tests/
 │   ├── __init__.py
 │   ├── test_docs_tools.py
 │   ├── test_filesystem_tools.py
 │   ├── test_git_tools.py
 │   ├── test_main.py
+│   ├── test_mcp_stdio_integration.py
 │   ├── test_path_utils.py
 │   ├── test_search_tools.py
 │   ├── test_tool_plugins.py
-│   └── test_tool_registry.py
+│   ├── test_tool_registry.py
+│   └── test_web_ui.py
 ├── tool_plugins/
 │   ├── __init__.py
 │   ├── docs.py
@@ -121,6 +121,8 @@ ContextServer/
 │   ├── filesystem_tools.py
 │   ├── git_tools.py
 │   └── search_tools.py
+├── assets/
+│   └── contextserver-architecture.png
 ├── .gitignore
 ├── LICENSE
 ├── README.md
@@ -135,6 +137,7 @@ ContextServer/
 | `server/mcp_server.py` | Wraps the MCP SDK low-level server and exposes `tools/list` and `tools/call`. |
 | `server/tool_registry.py` | Stores tool definitions, returns tool manifests, validates parameters, and dispatches calls. |
 | `server/path_utils.py` | Resolves paths and enforces containment inside the configured repository root. |
+| `server/web_ui.py` | Local browser dashboard for managing stdio MCP server definitions and calling tools. |
 | `tool_plugins/` | Internal plugin-style registration modules for built-in tool groups. |
 | `tools/docs_tools.py` | Implements `docs_search`. |
 | `tools/filesystem_tools.py` | Implements `read_file`, `list_directory`, and `search_files`. |
@@ -219,6 +222,50 @@ Starting ContextServer with transport: stdio
 ```
 
 After startup, the process waits for MCP messages on stdio. Running it directly in a terminal is useful only as a startup smoke test. Press `Ctrl+C` to stop it.
+
+## Running the Local Web UI
+
+ContextServer includes a local browser dashboard for manually working with MCP servers. The dashboard can:
+
+- Show the built-in ContextServer entry for the selected repository root.
+- List tools from any configured stdio MCP server.
+- Call tools with JSON arguments.
+- Add and remove user-defined stdio MCP server definitions.
+
+Start the dashboard:
+
+```bash
+python -m server.web_ui --repo-root /path/to/repo
+```
+
+Or use the installed console script:
+
+```bash
+context-server-ui --repo-root /path/to/repo
+```
+
+Expected startup output:
+
+```text
+ContextServer UI: http://127.0.0.1:8765
+Repository root: /path/to/repo
+MCP server config: /path/to/ContextServer/.contextserver/mcp_servers.json
+```
+
+Open the shown URL in a browser.
+
+### Adding Other MCP Servers
+
+The dashboard supports stdio MCP servers. To add one, provide:
+
+| Field | Description |
+| --- | --- |
+| Name | Display name in the dashboard. |
+| Command | Executable command, such as `python`, `node`, or an installed MCP server binary. |
+| Args | Shell-style argument string, such as `-m package.server --flag value`. |
+| Working directory | Optional process working directory. |
+
+User-added server definitions are stored locally in `.contextserver/mcp_servers.json`, which is ignored by Git. Commands run on your machine, so only add MCP servers you trust.
 
 ## Using the Interactive CLI Client
 
@@ -764,7 +811,7 @@ python -m pytest
 Expected result:
 
 ```text
-117 passed
+124 passed
 ```
 
 Run a single test module:
@@ -843,8 +890,9 @@ The current test suite covers:
 | `tests/test_search_tools.py` | Literal grep, context lines, include patterns, case sensitivity, binary skip behavior. |
 | `tests/test_mcp_stdio_integration.py` | End-to-end MCP stdio `tools/list` and `tools/call` behavior. |
 | `tests/test_main.py` | Argument parsing and repository root validation. |
+| `tests/test_web_ui.py` | Local web UI config helpers and built-in MCP server tool listing. |
 
-## Known Limitations
+## Scope Boundaries
 
 - Only stdio transport is implemented.
 - Search is literal grep-style full-text search, not semantic search.
@@ -852,7 +900,7 @@ The current test suite covers:
 - Tool outputs are returned as text content. Structured outputs are JSON-serialized into text.
 - Filesystem tools are read-only.
 - Git tools require the configured repository root to contain `.git`.
-- The CLI client is a manual testing helper, not a full MCP client application.
+- The CLI client and web dashboard are manual testing helpers, not hosted multi-user applications.
 
 ## Development Notes
 
